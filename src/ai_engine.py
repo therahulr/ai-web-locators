@@ -91,6 +91,222 @@ Create parameterized locators using Python f-strings:
 
         logger.info(f"AI Engine initialized with model: {self.model}")
 
+    def generate_locators_from_elements(
+        self,
+        screenshot_base64: str,
+        elements_json: List[Dict[str, Any]],
+        url: str
+    ) -> Dict[str, Any]:
+        """
+        Generate Python locators from structured element JSON (Phase 1)
+
+        Args:
+            screenshot_base64: Base64 encoded screenshot
+            elements_json: List of structured element dictionaries
+            url: Current page URL
+
+        Returns:
+            Locator definitions
+        """
+        try:
+            logger.info(f"Generating locators for {len(elements_json)} elements...")
+
+            prompt = f"""Analyze the screenshot and structured element data to generate Python locators.
+
+**Page URL:** {url}
+
+**Elements (JSON):**
+```json
+{json.dumps(elements_json, indent=2)}
+```
+
+**Task:**
+1. For each element, generate a Python locator name following naming conventions
+2. Choose optimal locator strategy (prefer ID > Name > XPath > CSS)
+3. Use the xpath/css provided in JSON or improve if needed
+4. Generate descriptive names: USERNAME_INPUT, CONTRACTOR_DROPDOWN, LOGIN_BUTTON
+
+**RULES:**
+- locator_type must be: "id", "xpath", "css", or "name"
+- Names: ALL_CAPS_SNAKE_CASE with element type suffix
+- Use element 'label' or 'text' or 'description' to create meaningful names
+- If element has label "Contractor", name it "CONTRACTOR_DROPDOWN"
+
+**Output JSON:**
+{{
+  "elements": [
+    {{
+      "element_index": 0,
+      "name": "USERNAME_INPUT",
+      "locator_type": "id",
+      "locator_value": "username",
+      "element_type": "input",
+      "description": "Username text input field"
+    }}
+  ]
+}}
+"""
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are an expert QA engineer. Generate Python locators from structured element data."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{screenshot_base64}",
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                response_format={"type": "json_object"}
+            )
+
+            result_text = response.choices[0].message.content
+            result = json.loads(result_text)
+
+            logger.info(f"Generated {len(result.get('elements', []))} locators")
+            return result
+
+        except Exception as e:
+            logger.error(f"Locator generation failed: {e}")
+            raise
+
+    def generate_natural_language_steps(
+        self,
+        screenshot_base64: str,
+        elements_summary: List[Dict[str, str]],
+        url: str,
+        page_title: str
+    ) -> Dict[str, Any]:
+        """
+        Generate natural language test steps (Phase 2)
+
+        Args:
+            screenshot_base64: Base64 encoded screenshot
+            elements_summary: List of element summaries with labels
+            url: Current page URL
+            page_title: Page title
+
+        Returns:
+            Natural language test steps
+        """
+        try:
+            logger.info("Generating natural language test steps...")
+
+            # Create element summary
+            element_descriptions = []
+            for elem in elements_summary:
+                elem_desc = f"- {elem.get('description', 'Unknown element')}"
+                element_descriptions.append(elem_desc)
+
+            elements_text = "\n".join(element_descriptions[:30])  # Limit to 30
+
+            prompt = f"""Based on the screenshot and available elements, describe what a user would do on this page in natural, human-readable language.
+
+**Page:** {page_title}
+**URL:** {url}
+
+**Available Elements:**
+{elements_text}
+
+**Task:**
+Generate natural language test steps that describe the workflow a user would follow.
+
+**Format Requirements:**
+- Use natural language like "Select an option from Contractor dropdown"
+- Include proper element names/labels from the screenshot
+- Be specific: "Enter your username in the Username field" NOT "Enter text in input field"
+- Focus on user actions, not technical locators
+- Number steps sequentially
+
+**Example Output:**
+{{
+  "title": "Sales Center Login",
+  "steps": [
+    {{
+      "step_number": 1,
+      "action": "Navigate to the Sales Center login page"
+    }},
+    {{
+      "step_number": 2,
+      "action": "Select a contractor from the Contractor dropdown field"
+    }},
+    {{
+      "step_number": 3,
+      "action": "Enter your username in the Username input field"
+    }},
+    {{
+      "step_number": 4,
+      "action": "Click the Login button to proceed"
+    }}
+  ],
+  "validations": [
+    "Verify the dashboard loads successfully",
+    "Check that the user name appears in the header"
+  ]
+}}
+
+**Return JSON in this exact format.**
+"""
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a QA documentation expert. Write clear, natural language test steps for end users."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{screenshot_base64}",
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.4,
+                response_format={"type": "json_object"}
+            )
+
+            result_text = response.choices[0].message.content
+            result = json.loads(result_text)
+
+            logger.info(f"Generated {len(result.get('steps', []))} natural language steps")
+            return result
+
+        except Exception as e:
+            logger.error(f"Natural language step generation failed: {e}")
+            raise
+
     def analyze_page(
         self,
         screenshot_base64: str,

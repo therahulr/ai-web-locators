@@ -19,6 +19,7 @@ from src.ai_engine import AIEngine
 from src.locator_generator import LocatorGenerator
 from src.file_manager import FileManager
 from src.conversation_manager import ConversationManager
+from src.smart_element_extractor import SmartElementExtractor
 from src import utils
 from src.utils import (
     print_success, print_error, print_warning, print_info, print_header,
@@ -53,6 +54,7 @@ class LocatorTool:
         # Initialize components
         self.browser = BrowserManager(self.config['browser'])
         self.dom_analyzer = DOMAnalyzer()
+        self.element_extractor = SmartElementExtractor()
         self.ai_engine = AIEngine(self.config['openai'])
         self.locator_gen = LocatorGenerator(self.browser, self.config['locator'])
         self.file_manager = FileManager(self.config['output'])
@@ -227,66 +229,78 @@ Usage:
         print(help_text)
 
     def _cmd_capture(self) -> None:
-        """Capture and analyze current page"""
+        """Capture and analyze current page - TWO-PHASE APPROACH"""
         try:
-            print_info("Capturing current page...")
+            print_header("═══ CAPTURE & ANALYSIS (Two-Phase) ═══")
 
-            # Update page info
+            # ========== PHASE 0: CAPTURE PAGE STATE ==========
+            print_info("📸 Capturing page state...")
             self.browser.update_page_info()
             url = self.browser.current_url
             title = self.browser.current_title
 
-            print_info(f"Page: {title}")
-            print_info(f"URL: {url}")
+            print_success(f"Page: {title}")
+            print_info(f"URL: {url}\n")
 
             # Capture screenshot
-            print_info("Taking screenshot...")
             screenshot_b64 = self.browser.capture_screenshot()
 
-            # Extract DOM
-            print_info("Extracting DOM...")
+            # Extract DOM and parse elements
+            print_info("🔍 Extracting interactive elements...")
             raw_html = self.browser.get_dom()
-            self.dom_analyzer.load_html(raw_html)
-            cleaned_html = self.dom_analyzer.clean_html()
-            sanitized_html = self.dom_analyzer.sanitize_for_ai(cleaned_html)
 
-            # Get conversation context
-            context = self.conversation.get_context_summary()
+            # Use SmartElementExtractor - returns structured JSON
+            elements_json = self.element_extractor.extract_from_html(raw_html)
+            element_summary = self.element_extractor.get_summary()
 
-            # AI analysis
-            print_info("Analyzing with AI (this may take 10-20 seconds)...")
-            result = self.ai_engine.analyze_page(
+            print_success(f"Found {element_summary['total_elements']} interactive elements:")
+            print(f"  • Inputs: {element_summary['by_type'].get('text', 0) + element_summary['by_type'].get('password', 0)}")
+            print(f"  • Buttons: {element_summary['by_type'].get('button', 0)}")
+            print(f"  • Dropdowns: {element_summary['by_type'].get('dropdown', 0)}")
+            print(f"  • Links: {element_summary['by_type'].get('link', 0)}")
+            print(f"  • Elements with ID: {element_summary['elements_with_id']}")
+            print(f"  • Elements with Label: {element_summary['elements_with_label']}\n")
+
+            if not elements_json:
+                print_warning("No interactive elements found. Try navigating to a different page.")
+                return
+
+            # ========== PHASE 1: AI LOCATOR GENERATION ==========
+            print_header("PHASE 1: Generating Locators")
+            print_info("🤖 Sending structured data to AI (JSON format - efficient!)...")
+
+            locator_result = self.ai_engine.generate_locators_from_elements(
                 screenshot_b64,
-                sanitized_html,
-                url,
-                context
+                elements_json,
+                url
             )
 
-            # Process results
-            elements = result.get('elements', [])
-            dynamic_locators = result.get('dynamic_locators', [])
+            generated_locators = locator_result.get('elements', [])
+            print_success(f"AI generated {len(generated_locators)} locators\n")
 
-            print_success(f"Found {len(elements)} elements")
-
-            if not elements:
-                print_warning("No elements identified. Try retry or ask for specific elements.")
+            if not generated_locators:
+                print_warning("AI didn't generate locators. Try retry command.")
                 return
 
             # Validate locators
-            print_info("Validating locators...")
-            validation_results = self.locator_gen.validate_batch(elements)
+            print_info("✓ Validating locators on live page...")
+            validation_results = self.locator_gen.validate_batch(generated_locators)
 
-            # Display results
+            # Display validation results
             print_header("Validation Results:")
+            valid_count = 0
             for result in validation_results:
-                formatted = utils.format_validation_result(result)
-                print(formatted)
+                if result['valid']:
+                    print(f"  ✓ {result['name']}")
+                    valid_count += 1
+                else:
+                    print(f"  ✗ {result['name']} - {result.get('error', 'Failed')}")
 
             # Store valid locators
             self.current_page_name = extract_page_name_from_url(url)
             valid_locators = []
 
-            for elem, val_result in zip(elements, validation_results):
+            for elem, val_result in zip(generated_locators, validation_results):
                 if val_result['valid']:
                     self.locator_gen.add_locator(
                         self.current_page_name,
@@ -296,39 +310,57 @@ Usage:
                     )
                     valid_locators.append(elem['name'])
 
-            # Store dynamic locators
-            for dloc in dynamic_locators:
-                self.locator_gen.add_dynamic_locator(self.current_page_name, dloc)
+            # AUTO-SAVE LOCATORS
+            if valid_locators:
+                print_info(f"\n💾 Auto-saving {len(valid_locators)} locators...")
+                filename = sanitize_filename(self.current_page_name) + "_locators.py"
+                output_path = Path(self.config['output']['locators_dir']) / filename
+                self.locator_gen.generate_python_file(self.current_page_name, output_path)
+                print_success(f"Locators saved: {output_path}\n")
 
-            # Auto-generate test steps
-            print_info("\nGenerating test steps...")
-            try:
-                steps_result = self.ai_engine.generate_test_steps(
-                    screenshot_b64,
-                    sanitized_html,
-                    url,
-                    context
-                )
-                self.conversation.add_test_steps(self.current_page_name, url, steps_result)
-                print_success("Test steps generated successfully")
-            except Exception as step_error:
-                logger.warning(f"Failed to generate test steps: {step_error}")
-                print_warning("Test step generation failed (continuing...)")
+            # ========== PHASE 2: NATURAL LANGUAGE STEPS ==========
+            print_header("PHASE 2: Generating Natural Language Steps")
+            print_info("📝 Analyzing user workflow...")
+
+            # Prepare element summary for natural language generation
+            elements_summary = []
+            for elem_json in elements_json:
+                elements_summary.append({
+                    'description': elem_json.get('description', 'Unknown element'),
+                    'type': elem_json.get('type'),
+                    'label': elem_json.get('label'),
+                    'text': elem_json.get('text')
+                })
+
+            steps_result = self.ai_engine.generate_natural_language_steps(
+                screenshot_b64,
+                elements_summary,
+                url,
+                title
+            )
+
+            # Display steps
+            print_success(f"Generated {len(steps_result.get('steps', []))} test steps:\n")
+            for step in steps_result.get('steps', []):
+                print(f"  {step['step_number']}. {step['action']}")
+
+            # Save steps to conversation
+            self.conversation.add_test_steps(self.current_page_name, url, steps_result)
+
+            # AUTO-SAVE DOCUMENTATION
+            print_info("\n💾 Auto-saving documentation...")
+            self._auto_save_documentation()
 
             # Update conversation
             self.conversation.add_page_visit(url, title)
             self.conversation.add_locators(self.current_page_name, valid_locators)
-            self.conversation.add_interaction('capture', {'url': url}, result)
 
-            # Summary
+            # ========== SUMMARY ==========
             summary = self.locator_gen.get_validation_summary()
-            print_success(
-                f"\nSummary: {summary['valid']}/{summary['total']} locators valid "
-                f"({summary['success_rate']:.1f}% success rate)"
-            )
-
-            print_info(f"\nUse 'save' to export locators to Python file")
-            print_info(f"Use 'docs' to export complete documentation with test steps")
+            print_header("═══ CAPTURE COMPLETE ═══")
+            print_success(f"✓ Locators: {summary['valid']}/{summary['total']} valid ({summary['success_rate']:.1f}%)")
+            print_success(f"✓ Test Steps: {len(steps_result.get('steps', []))} natural language steps")
+            print_success(f"✓ Files: Locators & Documentation auto-saved\n")
 
         except Exception as e:
             print_error(f"Capture failed: {e}")
@@ -521,6 +553,71 @@ Usage:
         except Exception as e:
             print_error(f"Save failed: {e}")
             logger.exception("Save error")
+
+    def _auto_save_documentation(self) -> None:
+        """Auto-save documentation (called after capture)"""
+        try:
+            stats = self.conversation.get_statistics()
+
+            if stats['pages_visited'] == 0:
+                return
+
+            # Generate markdown content (same as _cmd_docs but silent)
+            session_data = self.conversation.get_session_data()
+
+            doc_lines = [
+                f"# Test Session Documentation",
+                f"\n**Session ID:** {stats['session_id']}",
+                f"**Started:** {stats['started_at']}",
+                f"**Pages Visited:** {stats['pages_visited']}",
+                f"**Locators Generated:** {stats['total_locators']}",
+                f"\n---\n",
+                f"\n## Pages Visited\n"
+            ]
+
+            for idx, page in enumerate(session_data['pages_visited'], 1):
+                doc_lines.append(f"\n### {idx}. {page['title']}")
+                doc_lines.append(f"**URL:** {page['url']}")
+                doc_lines.append(f"**Timestamp:** {page['timestamp']}\n")
+
+            # AI-Generated Test Steps
+            if session_data.get('test_steps'):
+                doc_lines.append(f"\n## AI-Generated Test Steps\n")
+                for step_group in session_data['test_steps']:
+                    doc_lines.append(f"\n### {step_group.get('title', step_group['page'])}")
+                    doc_lines.append(f"**Page:** {step_group['page']}")
+                    doc_lines.append(f"**URL:** {step_group['url']}\n")
+
+                    # Test Steps
+                    if step_group.get('steps'):
+                        doc_lines.append("\n**Test Steps:**")
+                        for step in step_group['steps']:
+                            doc_lines.append(f"\n{step['step_number']}. {step['action']}")
+
+                    # Validations
+                    if step_group.get('validations'):
+                        doc_lines.append("\n\n**Validations:**")
+                        for validation in step_group['validations']:
+                            doc_lines.append(f"- {validation}")
+
+                    doc_lines.append("\n---\n")
+
+            if session_data['locators_generated']:
+                doc_lines.append(f"\n## Locators Generated\n")
+                for loc_group in session_data['locators_generated']:
+                    doc_lines.append(f"\n### {loc_group['page']}")
+                    for locator in loc_group['locators']:
+                        doc_lines.append(f"- {locator}")
+
+            doc_content = "\n".join(doc_lines)
+
+            # Save to file
+            filename = f"session_{stats['session_id']}.md"
+            doc_path = self.file_manager.save_markdown_doc(doc_content, filename)
+            print_success(f"Documentation saved: {doc_path}")
+
+        except Exception as e:
+            logger.error(f"Auto-save documentation failed: {e}")
 
     def _cmd_docs(self) -> None:
         """Export documentation"""
