@@ -96,6 +96,9 @@ class BrowserManager:
             if not self.page:
                 raise RuntimeError("Browser not launched")
 
+            # Update page info to get current URL/title
+            self.update_page_info()
+
             logger.info("Capturing screenshot...")
             screenshot_bytes = self.page.screenshot(full_page=True, type='png')
 
@@ -121,6 +124,9 @@ class BrowserManager:
         try:
             if not self.page:
                 raise RuntimeError("Browser not launched")
+
+            # Update page info to get current URL/title
+            self.update_page_info()
 
             logger.info("Extracting DOM...")
 
@@ -171,6 +177,14 @@ class BrowserManager:
                 selector = f"xpath={locator_value}"
             elif locator_type == 'css':
                 selector = locator_value
+            elif locator_type == 'name':
+                selector = f"[name='{locator_value}']"
+            elif locator_type == 'link_text':
+                selector = f"xpath=//a[text()='{locator_value}']"
+            elif locator_type == 'partial_link_text':
+                selector = f"xpath=//a[contains(text(), '{locator_value}')]"
+            elif locator_type == 'text':
+                selector = f"text={locator_value}"
             else:
                 return {
                     'valid': False,

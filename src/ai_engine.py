@@ -23,6 +23,13 @@ Your task is to analyze provided screenshots and DOM HTML to identify interactiv
 1. ID (best - unique and stable)
 2. XPath (good - flexible and precise)
 3. CSS (good - fast and readable)
+4. Name attribute (acceptable for form fields)
+
+**IMPORTANT RULES:**
+- ALWAYS use "id", "xpath", "css", or "name" as locator_type
+- NEVER use "link_text" or "partial_link_text" - use xpath instead
+- For links: use xpath like `//a[text()='Link Text']` or `//a[contains(text(), 'Link')]`
+- Prefer unique attributes (id, name) over text-based locators when available
 
 **Naming Conventions:**
 - Use ALL_CAPS_SNAKE_CASE

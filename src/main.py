@@ -98,8 +98,8 @@ class LocatorTool:
             self.running = True
 
             print_success("Browser launched successfully!")
-            print_info("Navigate to your application manually, then type commands.")
-            print_info("Type 'help' for available commands.\n")
+            print_info("Navigate to your application manually, then enter commands.")
+            print_info("Type 'help' or '0' for menu | Use numbers (1-12) or command names\n")
 
             self._command_loop()
 
@@ -147,11 +147,32 @@ class LocatorTool:
         Execute user command
 
         Args:
-            command: Command string
+            command: Command string (can be text or number)
         """
         parts = command.split(maxsplit=1)
         cmd = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
+
+        # Numeric command mapping
+        numeric_commands = {
+            '0': 'help',
+            '1': 'capture',
+            '2': 'steps',
+            '3': 'elements',
+            '4': 'sections',
+            '5': 'retry',
+            '6': 'ask',
+            '7': 'save',
+            '8': 'docs',
+            '9': 'status',
+            '10': 'list',
+            '11': 'clear',
+            '12': 'exit'
+        }
+
+        # Convert numeric to command name
+        if cmd in numeric_commands:
+            cmd = numeric_commands[cmd]
 
         commands = {
             'help': self._cmd_help,
@@ -173,28 +194,35 @@ class LocatorTool:
         if cmd in commands:
             commands[cmd]()
         else:
-            print_warning(f"Unknown command: {cmd}. Type 'help' for available commands.")
+            print_warning(f"Unknown command: {cmd}. Type 'help' or '0' for available commands.")
 
     def _cmd_help(self) -> None:
         """Display help information"""
         help_text = """
-Available Commands:
+╔═══════════════════════════════════════════════════════════╗
+║            Available Commands (Numeric or Text)           ║
+╠═════╦═════════════════════════════════════════════════════╣
+║  #  ║  Command           Description                      ║
+╠═════╬═════════════════════════════════════════════════════╣
+║  1  ║  capture        - Analyze page & generate locators  ║
+║  2  ║  steps          - Generate test steps for workflow  ║
+║  3  ║  elements       - List all interactive elements     ║
+║  4  ║  sections       - Identify page sections/modules    ║
+║  5  ║  retry          - Re-analyze with fresh AI request  ║
+║  6  ║  ask <query>    - Ask question about current page   ║
+║  7  ║  save           - Save locators to Python file      ║
+║  8  ║  docs           - Export documentation to markdown  ║
+║  9  ║  status         - Show session statistics           ║
+║ 10  ║  list           - List generated files              ║
+║ 11  ║  clear          - Clear conversation history        ║
+║ 12  ║  exit/quit      - Exit tool                         ║
+║  0  ║  help           - Show this help menu               ║
+╚═════╩═════════════════════════════════════════════════════╝
 
-  capture      - Analyze current page and generate locators
-  steps        - Generate test steps for current workflow
-  elements     - List all identified elements on current page
-  sections     - Identify page sections/modules
-  retry        - Re-analyze current page with fresh AI request
-  ask <query>  - Ask natural language question about current page
-  save         - Save locators to Python file
-  docs         - Export documentation to markdown
-  status       - Show current session statistics
-  list         - List generated files
-  clear        - Clear conversation history
-  exit/quit    - Exit tool
-
-Navigation:
-  Navigate manually in the browser window before running commands.
+Usage:
+  - Enter command name: capture
+  - Or enter number: 1
+  - Navigate manually in browser before running commands
 """
         print(help_text)
 
@@ -272,6 +300,21 @@ Navigation:
             for dloc in dynamic_locators:
                 self.locator_gen.add_dynamic_locator(self.current_page_name, dloc)
 
+            # Auto-generate test steps
+            print_info("\nGenerating test steps...")
+            try:
+                steps_result = self.ai_engine.generate_test_steps(
+                    screenshot_b64,
+                    sanitized_html,
+                    url,
+                    context
+                )
+                self.conversation.add_test_steps(self.current_page_name, url, steps_result)
+                print_success("Test steps generated successfully")
+            except Exception as step_error:
+                logger.warning(f"Failed to generate test steps: {step_error}")
+                print_warning("Test step generation failed (continuing...)")
+
             # Update conversation
             self.conversation.add_page_visit(url, title)
             self.conversation.add_locators(self.current_page_name, valid_locators)
@@ -285,6 +328,7 @@ Navigation:
             )
 
             print_info(f"\nUse 'save' to export locators to Python file")
+            print_info(f"Use 'docs' to export complete documentation with test steps")
 
         except Exception as e:
             print_error(f"Capture failed: {e}")
@@ -506,6 +550,38 @@ Navigation:
                 doc_lines.append(f"\n### {idx}. {page['title']}")
                 doc_lines.append(f"**URL:** {page['url']}")
                 doc_lines.append(f"**Timestamp:** {page['timestamp']}\n")
+
+            # AI-Generated Test Steps
+            if session_data.get('test_steps'):
+                doc_lines.append(f"\n## AI-Generated Test Steps\n")
+                for step_group in session_data['test_steps']:
+                    doc_lines.append(f"\n### {step_group.get('title', step_group['page'])}")
+                    doc_lines.append(f"**Page:** {step_group['page']}")
+                    doc_lines.append(f"**URL:** {step_group['url']}\n")
+
+                    # Prerequisites
+                    if step_group.get('prerequisites'):
+                        doc_lines.append("\n**Prerequisites:**")
+                        for prereq in step_group['prerequisites']:
+                            doc_lines.append(f"- {prereq}")
+
+                    # Test Steps
+                    if step_group.get('steps'):
+                        doc_lines.append("\n**Test Steps:**")
+                        for step in step_group['steps']:
+                            doc_lines.append(f"\n{step['step_number']}. **{step['action']}**")
+                            if step.get('locator') and step['locator'] != 'N/A':
+                                doc_lines.append(f"   - Locator: `{step['locator']}`")
+                            if step.get('description'):
+                                doc_lines.append(f"   - {step['description']}")
+
+                    # Validations
+                    if step_group.get('validations'):
+                        doc_lines.append("\n**Validations:**")
+                        for validation in step_group['validations']:
+                            doc_lines.append(f"- {validation}")
+
+                    doc_lines.append("\n---\n")
 
             if session_data['locators_generated']:
                 doc_lines.append(f"\n## Locators Generated\n")

@@ -37,51 +37,100 @@ class DOMAnalyzer:
             logger.error(f"Failed to load HTML: {e}")
             raise
 
-    def clean_html(self, max_size: int = 50000) -> str:
+    def clean_html(self, max_size: int = 40000) -> str:
         """
-        Clean HTML for AI processing by removing noise
+        Clean HTML for AI processing by removing noise and focusing on interactive elements
 
         Args:
             max_size: Maximum HTML size in characters
 
         Returns:
-            Cleaned HTML string
+            Cleaned and optimized HTML string
         """
         try:
             if not self.soup:
                 raise RuntimeError("HTML not loaded")
 
-            logger.info("Cleaning HTML...")
+            logger.info("Cleaning and optimizing DOM...")
 
-            # Remove script and style tags
-            for tag in self.soup(['script', 'style', 'noscript', 'svg']):
+            # Step 1: Remove noise tags completely
+            for tag in self.soup(['script', 'style', 'noscript', 'svg', 'iframe', 'meta', 'link']):
                 tag.decompose()
 
-            # Remove comments
-            for comment in self.soup.find_all(string=lambda text: isinstance(text, str) and text.strip().startswith('<!--')):
+            # Step 2: Remove comments
+            from bs4 import Comment
+            for comment in self.soup.find_all(string=lambda text: isinstance(text, Comment)):
                 comment.extract()
 
-            # Remove inline styles and event handlers
+            # Step 3: Clean all tags - remove noise attributes
+            noise_attrs = [
+                'style', 'class', 'onclick', 'onchange', 'onload', 'onfocus', 'onblur',
+                'data-v-', 'data-reactid', 'data-react-', '__reactProps',
+                'aria-describedby', 'aria-controls', 'aria-expanded'
+            ]
+
             for tag in self.soup.find_all(True):
-                # Remove attributes that add noise
                 attrs_to_remove = []
-                for attr in tag.attrs:
-                    if attr.startswith('on') or attr in ['style', 'class']:
+                for attr in list(tag.attrs.keys()):
+                    # Remove by exact match or prefix
+                    if attr in noise_attrs or any(attr.startswith(prefix) for prefix in ['on', 'data-v-', 'data-react']):
                         attrs_to_remove.append(attr)
 
                 for attr in attrs_to_remove:
                     del tag.attrs[attr]
 
-            # Get cleaned HTML
-            cleaned = str(self.soup)
+            # Step 4: Extract only relevant sections (focus on forms, buttons, inputs)
+            interactive_tags = ['form', 'input', 'button', 'select', 'textarea', 'a', 'label']
+            relevant_sections = []
 
-            # Truncate if too large
+            # Find all interactive elements and their parent contexts
+            for tag_name in interactive_tags:
+                elements = self.soup.find_all(tag_name)
+                for elem in elements:
+                    # Get parent context (up to 2 levels)
+                    parent = elem.parent
+                    if parent and parent.name not in ['html', 'body']:
+                        relevant_sections.append(parent)
+                    else:
+                        relevant_sections.append(elem)
+
+            # Step 5: Build focused HTML from relevant sections
+            if relevant_sections:
+                focused_soup = BeautifulSoup('<body></body>', 'html.parser')
+                seen_elements = set()
+
+                for section in relevant_sections:
+                    # Avoid duplicates
+                    section_str = str(section)
+                    if section_str not in seen_elements:
+                        seen_elements.add(section_str)
+                        focused_soup.body.append(section.extract() if hasattr(section, 'extract') else section)
+
+                cleaned = str(focused_soup)
+            else:
+                # Fallback: use full cleaned DOM
+                cleaned = str(self.soup)
+
+            # Step 6: Aggressive whitespace compression
+            cleaned = re.sub(r'\s+', ' ', cleaned)  # Multiple spaces to single
+            cleaned = re.sub(r'>\s+<', '><', cleaned)  # Remove spaces between tags
+            cleaned = re.sub(r'\n+', '\n', cleaned)  # Multiple newlines to single
+
+            # Step 7: Intelligent truncation if still too large
             if len(cleaned) > max_size:
-                logger.warning(f"HTML too large ({len(cleaned)} chars), truncating to {max_size}")
-                cleaned = cleaned[:max_size] + "\n<!-- TRUNCATED -->"
+                logger.warning(f"DOM still large ({len(cleaned)} chars), applying smart truncation to {max_size}")
+
+                # Try to find a good breaking point (end of a tag)
+                truncate_pos = max_size - 100
+                last_tag_close = cleaned.rfind('>', 0, truncate_pos)
+
+                if last_tag_close > max_size // 2:  # If we found a reasonable breaking point
+                    cleaned = cleaned[:last_tag_close + 1] + "\n<!-- DOM TRUNCATED FOR AI PROCESSING -->"
+                else:
+                    cleaned = cleaned[:max_size] + "\n<!-- DOM TRUNCATED FOR AI PROCESSING -->"
 
             self.cleaned_html = cleaned
-            logger.info(f"HTML cleaned successfully - Size: {len(cleaned)} chars")
+            logger.info(f"DOM optimized successfully - Original: {len(self.raw_html)} chars → Optimized: {len(cleaned)} chars (saved {len(self.raw_html) - len(cleaned)} chars)")
             return cleaned
 
         except Exception as e:

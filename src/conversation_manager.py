@@ -27,6 +27,7 @@ class ConversationManager:
             'started_at': datetime.now().isoformat(),
             'pages_visited': [],
             'locators_generated': [],
+            'test_steps': [],
             'questions_asked': []
         }
 
@@ -96,6 +97,28 @@ class ConversationManager:
 
         self.current_session['locators_generated'].append(record)
         logger.debug(f"Recorded {len(locators)} locators for {page_name}")
+
+    def add_test_steps(self, page_name: str, url: str, steps_data: Dict[str, Any]) -> None:
+        """
+        Record AI-generated test steps for a page
+
+        Args:
+            page_name: Page name
+            url: Page URL
+            steps_data: Test steps data from AI
+        """
+        record = {
+            'page': page_name,
+            'url': url,
+            'steps': steps_data.get('steps', []),
+            'title': steps_data.get('title', page_name),
+            'prerequisites': steps_data.get('prerequisites', []),
+            'validations': steps_data.get('validations', []),
+            'timestamp': datetime.now().isoformat()
+        }
+
+        self.current_session['test_steps'].append(record)
+        logger.debug(f"Recorded test steps for {page_name}")
 
     def add_question(self, question: str, answer: str) -> None:
         """
@@ -193,6 +216,7 @@ class ConversationManager:
             'started_at': datetime.now().isoformat(),
             'pages_visited': [],
             'locators_generated': [],
+            'test_steps': [],
             'questions_asked': []
         }
         self.history.clear()
