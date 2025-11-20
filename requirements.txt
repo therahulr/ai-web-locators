@@ -1,0 +1,16 @@
+# Core Dependencies
+playwright>=1.41.0
+openai>=1.51.0
+beautifulsoup4>=4.12.0
+pyyaml>=6.0.1
+
+# Optional: Selenium support (fallback)
+selenium>=4.16.0
+
+# Utilities
+lxml>=5.1.0
+
+# Development Dependencies (optional)
+pytest>=8.0.0
+black>=24.0.0
+pylint>=3.0.0
